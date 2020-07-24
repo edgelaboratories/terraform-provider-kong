@@ -1,6 +1,10 @@
 package kong
 
-import "regexp"
+import (
+	"log"
+	"regexp"
+	"time"
+)
 
 var computedPluginProperties = []string{"created_at", "id", "consumer", "service", "route"}
 
@@ -30,4 +34,25 @@ func readIntArrayFromInterface(in interface{}) []int {
 	}
 
 	return []int{}
+}
+
+func retryOnce(f func() error) error {
+	return retry(1, f)
+}
+
+func retry(retries int, f func() error) error {
+	attempt := 1
+
+	for {
+		if err := f(); err != nil {
+			if attempt > retries {
+				return err
+			}
+			log.Printf("Attempt %d failed: %v, retry in 1 second...", attempt, err)
+			time.Sleep(1 * time.Second)
+			attempt++
+			continue
+		}
+		return nil
+	}
 }
