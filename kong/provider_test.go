@@ -38,8 +38,7 @@ func TestProvider_impl(t *testing.T) {
 func TestProvider_configure(t *testing.T) {
 
 	rc := terraform.NewResourceConfigRaw(map[string]interface{}{})
-	p := Provider()
-	err := p.Configure(rc)
+	err := testAccProvider.Configure(rc)
 	if err != nil {
 		t.Fatal(err)
 	}
