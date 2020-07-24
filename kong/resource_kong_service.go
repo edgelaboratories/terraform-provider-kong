@@ -79,23 +79,32 @@ func resourceKongServiceCreate(d *schema.ResourceData, meta interface{}) error {
 	serviceClient := config.adminClient.Services()
 
 	serviceRequest := createKongServiceRequestFromResourceData(d)
-	service, err := serviceClient.Create(serviceRequest)
-	if err != nil {
-		if config.upsertResources && strings.Contains(err.Error(), "unique constraint violation") {
-			dbService, err := serviceClient.GetServiceByName(*serviceRequest.Name)
-			if err != nil {
-				return fmt.Errorf("could not read existing Kong service %s: %w", *serviceRequest.Name, err)
+
+	var serviceID string
+	if err := retryOnce(func() error {
+		log.Printf("creating service %s", *serviceRequest.Name)
+
+		service, err := serviceClient.Create(serviceRequest)
+		if err != nil {
+			if config.upsertResources && strings.Contains(err.Error(), "unique constraint violation") {
+				dbService, err := serviceClient.GetServiceByName(*serviceRequest.Name)
+				if err != nil {
+					return fmt.Errorf("could not read existing Kong service %s: %w", *serviceRequest.Name, err)
+				}
+				log.Printf("service named %s already exists with ID: %s, using it", *serviceRequest.Name, *dbService.Id)
+
+				serviceID = *dbService.Id
+				return nil
 			}
-			log.Printf("service named %s already exists with ID: %s, using it", *serviceRequest.Name, *dbService.Id)
-
-			d.SetId(*dbService.Id)
-
-			return resourceKongServiceUpdate(d, meta)
+			return fmt.Errorf("failed to create kong service: %v error: %v", serviceRequest, err)
 		}
-		return fmt.Errorf("failed to create kong service: %v error: %v", serviceRequest, err)
+		serviceID = *service.Id
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	d.SetId(*service.Id)
+	d.SetId(serviceID)
 
 	return resourceKongServiceRead(d, meta)
 }
