@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/kevholditch/gokong"
 )
@@ -81,7 +82,7 @@ func resourceKongServiceCreate(d *schema.ResourceData, meta interface{}) error {
 	serviceRequest := createKongServiceRequestFromResourceData(d)
 
 	var serviceID string
-	if err := retryOnce(func() error {
+	if err := resource.Retry(config.retryTimeout, func() *resource.RetryError {
 		log.Printf("creating service %s", *serviceRequest.Name)
 
 		service, err := serviceClient.Create(serviceRequest)
@@ -89,14 +90,20 @@ func resourceKongServiceCreate(d *schema.ResourceData, meta interface{}) error {
 			if config.upsertResources && strings.Contains(err.Error(), "unique constraint violation") {
 				dbService, err := serviceClient.GetServiceByName(*serviceRequest.Name)
 				if err != nil {
-					return fmt.Errorf("could not read existing Kong service %s: %w", *serviceRequest.Name, err)
+					return &resource.RetryError{
+						Err:       fmt.Errorf("could not read existing Kong service %s: %w", *serviceRequest.Name, err),
+						Retryable: config.retryOnError,
+					}
 				}
 				log.Printf("service named %s already exists with ID: %s, using it", *serviceRequest.Name, *dbService.Id)
 
 				serviceID = *dbService.Id
 				return nil
 			}
-			return fmt.Errorf("failed to create kong service: %v error: %v", serviceRequest, err)
+			return &resource.RetryError{
+				Err:       fmt.Errorf("failed to create kong service: %v error: %v", serviceRequest, err),
+				Retryable: config.retryOnError,
+			}
 		}
 		serviceID = *service.Id
 		return nil
