@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/kevholditch/gokong"
 )
@@ -82,7 +83,7 @@ func resourceKongPluginCreate(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	var pluginID string
-	if err = retryOnce(func() error {
+	if err := resource.Retry(config.retryTimeout, func() *resource.RetryError {
 		log.Printf("creating plugin %s", pluginRequest.Name)
 
 		plugin, err := pluginClient.Create(pluginRequest)
@@ -92,13 +93,19 @@ func resourceKongPluginCreate(d *schema.ResourceData, meta interface{}) error {
 					pluginClient, pluginRequest.Name, pluginRequest.ConsumerId, pluginRequest.RouteId, pluginRequest.ServiceId,
 				)
 				if err != nil {
-					return err
+					return &resource.RetryError{
+						Err:       err,
+						Retryable: config.retryOnError,
+					}
 				}
 
 				pluginID = dbPlugin.Id
 				return nil
 			}
-			return fmt.Errorf("failed to create kong plugin: %v error: %w", pluginRequest, err)
+			return &resource.RetryError{
+				Err:       fmt.Errorf("failed to create kong plugin: %v error: %w", pluginRequest, err),
+				Retryable: config.retryOnError,
+			}
 		}
 		pluginID = plugin.Id
 		return nil
