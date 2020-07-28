@@ -92,7 +92,6 @@ func resourceKongPluginCreate(d *schema.ResourceData, meta interface{}) error {
 
 			d.SetId(dbPlugin.Id)
 			return resourceKongPluginUpdate(d, meta)
-
 		}
 		return fmt.Errorf("failed to create kong plugin: %v error: %w", pluginRequest, err)
 	}
@@ -209,7 +208,7 @@ func pluginConfigJsonToString(data map[string]interface{}) string {
 func findPlugin(
 	pluginClient *gokong.PluginClient, name string, consumerId *gokong.Id, routeId *gokong.Id, serviceId *gokong.Id,
 ) (*gokong.Plugin, error) {
-	// size is just how many plugins per request (1000 is the max)
+	// Size is just how many plugins per request (1000 is the max)
 	// but List will fetch all the pages so all the plugins
 	dbPlugins, err := pluginClient.List(&gokong.PluginQueryString{Size: 1000})
 	if err != nil {

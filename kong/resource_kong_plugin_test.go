@@ -162,12 +162,14 @@ func TestAccKongPluginImportConfigJson(t *testing.T) {
 }
 
 func TestAccKongPlugin_Upsert(t *testing.T) {
-
-	uniqueConstraintError, _ := regexp.Compile(".*unique constraint violation.*")
+	uniqueConstraintError, err := regexp.Compile(".*unique constraint violation.*")
+	if err != nil {
+		t.Fatalf("could not compile regex: %v", err)
+	}
 
 	TestProvider_configure(t)
 
-	os.Unsetenv("KONG_UPSERT_RESOURCES")
+	// We'll manipulate this variable during the test, unset it at the end
 	defer os.Unsetenv("KONG_UPSERT_RESOURCES")
 
 	// Simulate that plugin already exists but with different values.
@@ -201,17 +203,21 @@ EOT
 	resource.Test(t, resource.TestCase{
 		Providers: testAccProviders,
 		Steps: []resource.TestStep{
-			// With upsert disable (default value), this will raise a unique constraint error.
+			// With upsert disable (default value), this will raise an unique constraint error.
 			{
+				PreConfig: func() {
+					if err := os.Unsetenv("KONG_UPSERT_RESOURCES"); err != nil {
+						t.Fatalf("could not unset environment variable KONG_UPSERT_RESOURCES: %v", err)
+					}
+				},
 				Config:      pluginConf,
 				ExpectError: uniqueConstraintError,
 			},
-			// enable upsert, this should update the existing
+			// Enable upsert, this should update the existing
 			{
 				PreConfig: func() {
-					err := os.Setenv("KONG_UPSERT_RESOURCES", "true")
-					if err != nil {
-						t.Fatalf("Could not set KONG_UPSERT_RESOURCES env variable: %v", err)
+					if err := os.Setenv("KONG_UPSERT_RESOURCES", "true"); err != nil {
+						t.Fatalf("could not set KONG_UPSERT_RESOURCES env variable: %v", err)
 					}
 				},
 				Config: pluginConf,
