@@ -12,6 +12,7 @@ type config struct {
 	adminClient           *gokong.KongAdminClient
 	strictPlugins         bool
 	strictConsumerPlugins bool
+	upsertResources       bool
 }
 
 func Provider() terraform.ResourceProvider {
@@ -60,6 +61,12 @@ func Provider() terraform.ResourceProvider {
 				DefaultFunc: envDefaultFuncWithDefault("STRICT_PLUGINS_MATCH", "false"),
 				Description: "Should plugins `config_json` field strictly match plugin configuration",
 			},
+			"upsert_resources": &schema.Schema{
+				Type:        schema.TypeBool,
+				Optional:    true,
+				DefaultFunc: envDefaultFuncWithDefault("KONG_UPSERT_RESOURCES", "false"),
+				Description: "Use existing resources if creation raises a unique constraint error",
+			},
 		},
 
 		ResourcesMap: map[string]*schema.Resource{
@@ -100,7 +107,6 @@ func envDefaultFuncWithDefault(key string, defaultValue string) schema.SchemaDef
 }
 
 func providerConfigure(d *schema.ResourceData) (interface{}, error) {
-
 	kongConfig := &gokong.Config{
 		HostAddress:        d.Get("kong_admin_uri").(string),
 		Username:           d.Get("kong_admin_username").(string),
@@ -111,8 +117,9 @@ func providerConfigure(d *schema.ResourceData) (interface{}, error) {
 	}
 
 	config := &config{
-		adminClient:   gokong.NewClient(kongConfig),
-		strictPlugins: d.Get("strict_plugins_match").(bool),
+		adminClient:     gokong.NewClient(kongConfig),
+		strictPlugins:   d.Get("strict_plugins_match").(bool),
+		upsertResources: d.Get("upsert_resources").(bool),
 	}
 
 	return config, nil

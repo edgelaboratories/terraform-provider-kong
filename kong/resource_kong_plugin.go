@@ -3,6 +3,7 @@ package kong
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/kevholditch/gokong"
@@ -71,16 +72,28 @@ func resourceKongPlugin() *schema.Resource {
 }
 
 func resourceKongPluginCreate(d *schema.ResourceData, meta interface{}) error {
+	config := meta.(*config)
+	pluginClient := config.adminClient.Plugins()
 
 	pluginRequest, err := createKongPluginRequestFromResourceData(d)
 	if err != nil {
 		return err
 	}
 
-	plugin, err := meta.(*config).adminClient.Plugins().Create(pluginRequest)
-
+	plugin, err := pluginClient.Create(pluginRequest)
 	if err != nil {
-		return fmt.Errorf("failed to create kong plugin: %v error: %v", pluginRequest, err)
+		if config.upsertResources && strings.Contains(err.Error(), "unique constraint violation") {
+			dbPlugin, err := findPlugin(
+				pluginClient, pluginRequest.Name, pluginRequest.ConsumerId, pluginRequest.RouteId, pluginRequest.ServiceId,
+			)
+			if err != nil {
+				return err
+			}
+
+			d.SetId(dbPlugin.Id)
+			return resourceKongPluginUpdate(d, meta)
+		}
+		return fmt.Errorf("failed to create kong plugin: %v error: %w", pluginRequest, err)
 	}
 
 	d.SetId(plugin.Id)
@@ -190,4 +203,24 @@ func pluginConfigJsonToString(data map[string]interface{}) string {
 	rawJson, _ := json.Marshal(marshalledData)
 
 	return string(rawJson)
+}
+
+func findPlugin(
+	pluginClient *gokong.PluginClient, name string, consumerId *gokong.Id, routeId *gokong.Id, serviceId *gokong.Id,
+) (*gokong.Plugin, error) {
+	// Size is just how many plugins per request (1000 is the max)
+	// but List will fetch all the pages so all the plugins
+	dbPlugins, err := pluginClient.List(&gokong.PluginQueryString{Size: 1000})
+	if err != nil {
+		return nil, fmt.Errorf("could not read existing plugins: %w", err)
+	}
+	for _, p := range dbPlugins {
+		if p.Name == name &&
+			gokong.IdToString(p.ConsumerId) == gokong.IdToString(consumerId) &&
+			gokong.IdToString(p.RouteId) == gokong.IdToString(routeId) &&
+			gokong.IdToString(p.ServiceId) == gokong.IdToString(serviceId) {
+			return p, nil
+		}
+	}
+	return nil, fmt.Errorf("could not find plugin with name %s", name)
 }

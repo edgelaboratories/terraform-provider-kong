@@ -2,10 +2,13 @@ package kong
 
 import (
 	"fmt"
+	"os"
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/terraform"
+	"github.com/kevholditch/gokong"
 )
 
 func TestAccKongService(t *testing.T) {
@@ -81,6 +84,67 @@ func TestAccKongServiceImport(t *testing.T) {
 				ResourceName:      "kong_service.service",
 				ImportState:       true,
 				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+func TestAccKongService_Upsert(t *testing.T) {
+	uniqueConstraintError, err := regexp.Compile(".*unique constraint violation.*")
+	if err != nil {
+		t.Fatalf("could not compile regex: %v", err)
+	}
+
+	TestProvider_configure(t)
+
+	// We'll manipulate this variable during the test, unset it at the end
+	defer os.Unsetenv("KONG_UPSERT_RESOURCES")
+
+	// Simulate that service with same name already exists but with different values.
+	request := &gokong.ServiceRequest{
+		Name:     gokong.String("test"),
+		Host:     gokong.String("foo.org"),
+		Protocol: gokong.String("https"),
+	}
+	service, err := testAccProvider.Meta().(*config).adminClient.Services().Create(request)
+	if err != nil {
+		t.Fatalf("could not create service test: %v", err)
+	}
+	expectedServiceID := *service.Id
+
+	serviceConf := `
+resource "kong_service" "service" {
+	name     = "test"
+	host     = "test.org"
+	protocol = "http"
+}`
+	resource.Test(t, resource.TestCase{
+		Providers: testAccProviders,
+		Steps: []resource.TestStep{
+			// With upsert disable (default value), this will raise a unique constraint error.
+			{
+				PreConfig: func() {
+					if err := os.Unsetenv("KONG_UPSERT_RESOURCES"); err != nil {
+						t.Fatalf("could not unset environment variable KONG_UPSERT_RESOURCES: %v", err)
+					}
+				}, Config: serviceConf,
+				ExpectError: uniqueConstraintError,
+			},
+			// Enable upsert, this should update the existing
+			{
+				PreConfig: func() {
+					err := os.Setenv("KONG_UPSERT_RESOURCES", "true")
+					if err != nil {
+						t.Fatalf("could not set KONG_UPSERT_RESOURCES env variable: %v", err)
+					}
+				},
+				Config: serviceConf,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckKongServiceExists("kong_service.service"),
+					resource.TestCheckResourceAttr("kong_service.service", "id", expectedServiceID),
+					resource.TestCheckResourceAttr("kong_service.service", "host", "test.org"),
+					resource.TestCheckResourceAttr("kong_service.service", "protocol", "http"),
+				),
 			},
 		},
 	})

@@ -2,6 +2,8 @@ package kong
 
 import (
 	"fmt"
+	"log"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/kevholditch/gokong"
@@ -73,11 +75,23 @@ func resourceKongService() *schema.Resource {
 }
 
 func resourceKongServiceCreate(d *schema.ResourceData, meta interface{}) error {
+	config := meta.(*config)
+	serviceClient := config.adminClient.Services()
 
 	serviceRequest := createKongServiceRequestFromResourceData(d)
-
-	service, err := meta.(*config).adminClient.Services().Create(serviceRequest)
+	service, err := serviceClient.Create(serviceRequest)
 	if err != nil {
+		if config.upsertResources && strings.Contains(err.Error(), "unique constraint violation") {
+			dbService, err := serviceClient.GetServiceByName(*serviceRequest.Name)
+			if err != nil {
+				return fmt.Errorf("could not read existing Kong service %s: %w", *serviceRequest.Name, err)
+			}
+			log.Printf("service named %s already exists with ID: %s, using it", *serviceRequest.Name, *dbService.Id)
+
+			d.SetId(*dbService.Id)
+
+			return resourceKongServiceUpdate(d, meta)
+		}
 		return fmt.Errorf("failed to create kong service: %v error: %v", serviceRequest, err)
 	}
 

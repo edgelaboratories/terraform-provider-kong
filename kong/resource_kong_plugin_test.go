@@ -2,10 +2,13 @@ package kong
 
 import (
 	"fmt"
+	"os"
+	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/terraform"
+	"github.com/kevholditch/gokong"
 )
 
 func TestAccKongGlobalPlugin(t *testing.T) {
@@ -153,6 +156,77 @@ func TestAccKongPluginImportConfigJson(t *testing.T) {
 				ResourceName:      "kong_plugin.hmac_auth",
 				ImportState:       true,
 				ImportStateVerify: false,
+			},
+		},
+	})
+}
+
+func TestAccKongPlugin_Upsert(t *testing.T) {
+	uniqueConstraintError, err := regexp.Compile(".*unique constraint violation.*")
+	if err != nil {
+		t.Fatalf("could not compile regex: %v", err)
+	}
+
+	TestProvider_configure(t)
+
+	// We'll manipulate this variable during the test, unset it at the end
+	defer os.Unsetenv("KONG_UPSERT_RESOURCES")
+
+	// Simulate that plugin already exists but with different values.
+	request := &gokong.PluginRequest{
+		Name: "hmac-auth",
+		Config: map[string]interface{}{
+			"algorithms": []string{
+				"hmac-sha384",
+				"hmac-sha512",
+			},
+		},
+	}
+	plugin, err := testAccProvider.Meta().(*config).adminClient.Plugins().Create(request)
+	if err != nil {
+		t.Fatalf("could not create plugin: %v", err)
+	}
+	expectedPluginID := plugin.Id
+
+	pluginConf := `
+resource "kong_plugin" "hmac_auth" {
+	name  = "hmac-auth"
+	config_json = <<EOT
+	{
+		"algorithms": [
+			"hmac-sha1",
+			"hmac-sha256"
+		]
+	}
+EOT
+}`
+	resource.Test(t, resource.TestCase{
+		Providers: testAccProviders,
+		Steps: []resource.TestStep{
+			// With upsert disable (default value), this will raise an unique constraint error.
+			{
+				PreConfig: func() {
+					if err := os.Unsetenv("KONG_UPSERT_RESOURCES"); err != nil {
+						t.Fatalf("could not unset environment variable KONG_UPSERT_RESOURCES: %v", err)
+					}
+				},
+				Config:      pluginConf,
+				ExpectError: uniqueConstraintError,
+			},
+			// Enable upsert, this should update the existing
+			{
+				PreConfig: func() {
+					if err := os.Setenv("KONG_UPSERT_RESOURCES", "true"); err != nil {
+						t.Fatalf("could not set KONG_UPSERT_RESOURCES env variable: %v", err)
+					}
+				},
+				Config: pluginConf,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckKongPluginExists("kong_plugin.hmac_auth"),
+					resource.TestCheckResourceAttr("kong_plugin.hmac_auth", "id", expectedPluginID),
+					resource.TestCheckResourceAttr("kong_plugin.hmac_auth", "name", "hmac-auth"),
+					resource.TestCheckResourceAttr("kong_plugin.hmac_auth", "config_json", "{\"algorithms\":[\"hmac-sha1\",\"hmac-sha256\"]}"),
+				),
 			},
 		},
 	})
