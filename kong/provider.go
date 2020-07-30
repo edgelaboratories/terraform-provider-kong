@@ -2,6 +2,7 @@ package kong
 
 import (
 	"os"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/terraform"
@@ -13,6 +14,8 @@ type config struct {
 	strictPlugins         bool
 	strictConsumerPlugins bool
 	upsertResources       bool
+	retryOnError          bool
+	retryTimeout          time.Duration
 }
 
 func Provider() terraform.ResourceProvider {
@@ -67,6 +70,18 @@ func Provider() terraform.ResourceProvider {
 				DefaultFunc: envDefaultFuncWithDefault("KONG_UPSERT_RESOURCES", "false"),
 				Description: "Use existing resources if creation raises a unique constraint error",
 			},
+			"retry_on_error": &schema.Schema{
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Default:     false,
+				Description: "If provider encounters an error on resources creation, retry until retry_timeout",
+			},
+			"retry_timeout": &schema.Schema{
+				Type:        schema.TypeInt,
+				Optional:    true,
+				Default:     20,
+				Description: "Timeout in seconds when retrying creation",
+			},
 		},
 
 		ResourcesMap: map[string]*schema.Resource{
@@ -120,6 +135,8 @@ func providerConfigure(d *schema.ResourceData) (interface{}, error) {
 		adminClient:     gokong.NewClient(kongConfig),
 		strictPlugins:   d.Get("strict_plugins_match").(bool),
 		upsertResources: d.Get("upsert_resources").(bool),
+		retryOnError:    d.Get("retry_on_error").(bool),
+		retryTimeout:    time.Duration(d.Get("retry_timeout").(int)) * time.Second,
 	}
 
 	return config, nil

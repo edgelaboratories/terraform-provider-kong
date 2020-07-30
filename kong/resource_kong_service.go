@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/kevholditch/gokong"
 )
@@ -79,23 +80,38 @@ func resourceKongServiceCreate(d *schema.ResourceData, meta interface{}) error {
 	serviceClient := config.adminClient.Services()
 
 	serviceRequest := createKongServiceRequestFromResourceData(d)
-	service, err := serviceClient.Create(serviceRequest)
-	if err != nil {
-		if config.upsertResources && strings.Contains(err.Error(), "unique constraint violation") {
-			dbService, err := serviceClient.GetServiceByName(*serviceRequest.Name)
-			if err != nil {
-				return fmt.Errorf("could not read existing Kong service %s: %w", *serviceRequest.Name, err)
+
+	var serviceID string
+	if err := resource.Retry(config.retryTimeout, func() *resource.RetryError {
+		log.Printf("creating service %s", *serviceRequest.Name)
+
+		service, err := serviceClient.Create(serviceRequest)
+		if err != nil {
+			if config.upsertResources && strings.Contains(err.Error(), "unique constraint violation") {
+				dbService, err := serviceClient.GetServiceByName(*serviceRequest.Name)
+				if err != nil {
+					return &resource.RetryError{
+						Err:       fmt.Errorf("could not read existing Kong service %s: %w", *serviceRequest.Name, err),
+						Retryable: config.retryOnError,
+					}
+				}
+				log.Printf("service named %s already exists with ID: %s, using it", *serviceRequest.Name, *dbService.Id)
+
+				serviceID = *dbService.Id
+				return nil
 			}
-			log.Printf("service named %s already exists with ID: %s, using it", *serviceRequest.Name, *dbService.Id)
-
-			d.SetId(*dbService.Id)
-
-			return resourceKongServiceUpdate(d, meta)
+			return &resource.RetryError{
+				Err:       fmt.Errorf("failed to create kong service: %v error: %v", serviceRequest, err),
+				Retryable: config.retryOnError,
+			}
 		}
-		return fmt.Errorf("failed to create kong service: %v error: %v", serviceRequest, err)
+		serviceID = *service.Id
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	d.SetId(*service.Id)
+	d.SetId(serviceID)
 
 	return resourceKongServiceRead(d, meta)
 }

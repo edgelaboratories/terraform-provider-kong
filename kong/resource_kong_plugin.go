@@ -3,8 +3,10 @@ package kong
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/kevholditch/gokong"
 )
@@ -80,23 +82,38 @@ func resourceKongPluginCreate(d *schema.ResourceData, meta interface{}) error {
 		return err
 	}
 
-	plugin, err := pluginClient.Create(pluginRequest)
-	if err != nil {
-		if config.upsertResources && strings.Contains(err.Error(), "unique constraint violation") {
-			dbPlugin, err := findPlugin(
-				pluginClient, pluginRequest.Name, pluginRequest.ConsumerId, pluginRequest.RouteId, pluginRequest.ServiceId,
-			)
-			if err != nil {
-				return err
-			}
+	var pluginID string
+	if err := resource.Retry(config.retryTimeout, func() *resource.RetryError {
+		log.Printf("creating plugin %s", pluginRequest.Name)
 
-			d.SetId(dbPlugin.Id)
-			return resourceKongPluginUpdate(d, meta)
+		plugin, err := pluginClient.Create(pluginRequest)
+		if err != nil {
+			if config.upsertResources && strings.Contains(err.Error(), "unique constraint violation") {
+				dbPlugin, err := findPlugin(
+					pluginClient, pluginRequest.Name, pluginRequest.ConsumerId, pluginRequest.RouteId, pluginRequest.ServiceId,
+				)
+				if err != nil {
+					return &resource.RetryError{
+						Err:       err,
+						Retryable: config.retryOnError,
+					}
+				}
+
+				pluginID = dbPlugin.Id
+				return nil
+			}
+			return &resource.RetryError{
+				Err:       fmt.Errorf("failed to create kong plugin: %v error: %w", pluginRequest, err),
+				Retryable: config.retryOnError,
+			}
 		}
-		return fmt.Errorf("failed to create kong plugin: %v error: %w", pluginRequest, err)
+		pluginID = plugin.Id
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	d.SetId(plugin.Id)
+	d.SetId(pluginID)
 
 	return resourceKongPluginRead(d, meta)
 }
