@@ -2,7 +2,10 @@ package kong
 
 import (
 	"fmt"
+	"log"
+	"strings"
 
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
 	"github.com/kevholditch/gokong"
 )
@@ -113,15 +116,43 @@ func resourceKongRoute() *schema.Resource {
 }
 
 func resourceKongRouteCreate(d *schema.ResourceData, meta interface{}) error {
+	config := meta.(*config)
+	routeClient := config.adminClient.Routes()
 
 	routeRequest := createKongRouteRequestFromResourceData(d)
 
-	route, err := meta.(*config).adminClient.Routes().Create(routeRequest)
-	if err != nil {
-		return fmt.Errorf("failed to create kong route: %v error: %v", routeRequest, err)
+	var routeID string
+	if err := resource.Retry(config.retryTimeout, func() *resource.RetryError {
+		log.Printf("creating route %v", routeRequest)
+
+		route, err := routeClient.Create(routeRequest)
+		if err != nil {
+			if config.upsertResources && strings.Contains(err.Error(), "unique constraint violation") {
+				dbRoute, err := routeClient.GetByName(*routeRequest.Name)
+				if err != nil {
+					return &resource.RetryError{
+						Err:       fmt.Errorf("could not read existing Kong service %s: %w", *routeRequest.Name, err),
+						Retryable: config.retryOnError,
+					}
+				}
+				log.Printf("route named %s already exists with ID: %s, using it", *routeRequest.Name, *dbRoute.Id)
+
+				routeID = *route.Id
+				return nil
+			}
+
+			return &resource.RetryError{
+				Err:       fmt.Errorf("failed to create kong route: %v error: %v", routeRequest, err),
+				Retryable: config.retryOnError,
+			}
+		}
+		routeID = *route.Id
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	d.SetId(*route.Id)
+	d.SetId(routeID)
 
 	return resourceKongRouteRead(d, meta)
 }
